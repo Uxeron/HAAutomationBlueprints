@@ -1,0 +1,151 @@
+blueprint:
+  name: Notify on print done
+  description: Notify the user when a print is finished and allow setting a reminder once it cools down or to shutdown.
+  domain: automation
+  input:
+    notify_device:
+      name: Device to notify
+      description: Device needs to run the official Home Assistant app to receive notifications.
+      selector:
+        device:
+          integration: mobile_app
+    # printer:
+    #   name: 3D Printer
+    #   selector:
+    #     device:
+    printer_state:
+      name: Printer state entity
+      selector:
+        entity:
+          domain: sensor
+          # device_id: !input printer
+    # printer_state_printing:
+    #   name: Printer state Printing
+    #   selector:
+    #     state:
+    #       entity_id: !input printer_state
+    # printer_state_finished:
+    #   name: Printer state Finished Printing
+    #   selector:
+    #     state:
+    #       entity_id: !input printer_state
+    printer_state_printing:
+      name: Printer state Printing
+      description: Name of the state the printer state entity is set to while printing
+      selector:
+        text:
+    printer_state_finished:
+      name: Printer state Finished Printing
+      description: Name of the state the printer state entity is set to once the printer finishes printing
+      selector:
+        text:
+    printer_bed_temp:
+      name: Printer bed temperature entity
+      selector:
+        entity:
+          domain: sensor
+          # device_id: !input printer
+    printer_nozzle_temp:
+      name: Printer nozzle temperature entity
+      selector:
+        entity:
+          domain: sensor
+          # device_id: !input printer
+    printer_shutdown:
+      name: Printer shutdown script
+      description: Script to run to shutdown the printer
+      selector:
+        entity:
+          filter:
+            - domain: script
+    cooldown_bed_temperature:
+      name: Printer cooldown bed temperature
+      description: The printer's bed temperature needs to go below this number for the reminder notification to trigger. Set a high number to ignore the bed temperature.
+      default: 30
+      selector:
+        number:
+          min: 30.0
+          max: 100.0
+          step: 1.0
+          mode: slider
+    shutdown_nozzle_temperature:
+      name: Printer shutdown nozzle temperature
+      description: The printer's nozzle temperature needs to go below this number for the printer to shutdown. Set a high number to ignore the nozzle temperature.
+      default: 100
+      selector:
+        number:
+          min: 30.0
+          max: 300.0
+          step: 1.0
+          mode: slider
+
+trigger:
+  - platform: state
+    entity_id: !input printer_state
+    from: !input printer_state_printing
+    to: !input printer_state_finished
+
+action:
+  - variables:
+      action_remind: "{{ 'REMIND_' ~ context.id }}"
+      action_shutdown: "{{ 'SHUTDOWN_' ~ context.id }}"
+  - type: notify
+    domain: mobile_app
+    device_id: !input notify_device
+    message: Print Done!
+    data:
+      actions:
+        - action: "{{ action_remind }}"
+          title: Remind
+        - action: "{{ action_shutdown }}"
+          title: Shutdown
+      notification_icon: mdi:printer-3d
+  - wait_for_trigger:
+      - platform: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: "{{ action_remind }}"
+      - platform: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: "{{ action_shutdown }}"
+      - platform: event
+        event_type: mobile_app_notification_cleared
+        event_data:
+          action_1_key: "{{ action_remind }}"
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ wait.trigger.event.data.action == action_remind }}"
+            alias: Should remind
+        sequence:
+          - if:
+              - condition: numeric_state
+                entity_id: !input printer_bed_temp
+                above: !input cooldown_bed_temperature
+            then:
+              - wait_for_trigger:
+                  - platform: numeric_state
+                    entity_id: !input printer_bed_temp
+                    below: !input cooldown_bed_temperature
+          - type: notify
+            domain: mobile_app
+            device_id: !input notify_device
+            message: Printbed cooled down!
+      - conditions:
+          - condition: template
+            value_template: "{{ wait.trigger.event.data.action == action_shutdown }}"
+            alias: Should shutdown
+        sequence:
+          - if:
+              - condition: numeric_state
+                entity_id: !input printer_nozzle_temp
+                above: !input shutdown_nozzle_temperature
+            then:
+              - wait_for_trigger:
+                  - platform: numeric_state
+                    entity_id: !input printer_nozzle_temp
+                    below: !input shutdown_nozzle_temperature
+          - service: !input printer_shutdown
+
+mode: restart
