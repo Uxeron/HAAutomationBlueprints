@@ -1,0 +1,39 @@
+blueprint:
+  name: "Safe 3D printer shutdown"
+  description: "Calls for the printer OS to shutdown before turning off power to not cause accidental corruption."
+  domain: script
+  input:
+    action1:
+      name: "Shutdown printer OS"
+      description: "Button entity that, once triggered, will initiate printer's OS shutdown."
+      selector:
+        entity:
+          filter:
+            domain: button
+    action2:
+      name: "Power OFF"
+      description: "Switch entity that, once triggered, will turn off power to the printer."
+      selector:
+        entity:
+          filter:
+            domain: switch
+    wait_time:
+      name: "Wait Time"
+      description: "Time to wait for the printer to fully shutdown."
+      selector:
+        duration:
+      default:
+        hours: 0
+        minutes: 0
+        seconds: 30
+
+sequence:
+  - service: button.press
+    target:
+      entity_id: !input action1
+  - delay: !input wait_time
+  - service: switch.turn_off
+    target:
+      entity_id: !input action2
+
+mode: single
