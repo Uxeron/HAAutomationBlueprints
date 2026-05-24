@@ -1,0 +1,204 @@
+blueprint:
+  name: 3D Printer Live Progress Notification
+  description: >
+    Sends a live progress notification to your phone while a 3D print is running.
+
+    Requires the Home Assistant Companion App on Android with live notifications
+    enabled. On Samsung devices, enable "Live notifications for all apps" in
+    Developer Options.
+  domain: automation
+  input:
+    printer_sensors:
+      name: Printer sensors
+      icon: mdi:printer-3d
+      input:
+        printer_name:
+          name: Printer name
+          description: >
+            A name for this printer used in title.
+          default: 3D Printer
+          selector:
+            text:
+        
+        printer_short_name:
+          name: Printer short name (optional)
+          description: >
+            An abbreviated name for the status bar chip.
+            If left blank, only the percentage is shown in the chip.
+          default: ""
+          selector:
+            text:
+
+        print_state_sensor:
+          name: Print state sensor
+          description: >
+            Sensor that reports the current printer state.
+          selector:
+            entity:
+              domain: sensor
+
+        progress_sensor:
+          name: Progress sensor (%)
+          description: Sensor that reports print progress as a number from 0-100.
+          selector:
+            entity:
+              domain: sensor
+
+        print_name_sensor:
+          name: Print name sensor
+          description: >
+            Sensor that reports the name of the file being printed.
+            Leave blank to omit the file name from the notification title.
+          default: ""
+          selector:
+            entity:
+              domain: sensor
+
+        eta_sensor:
+          name: ETA sensor
+          description: >
+            Sensor that reports the estimated time remaining or finish time.
+            Leave blank to omit ETA from the notification.
+          default: ""
+          selector:
+            entity:
+              domain: sensor
+
+    state_names:
+      name: State names
+      icon: mdi:list-status
+      description: >
+        Match these to the values your integration uses. Klipper defaults are
+        pre-filled, adjust for OctoPrint ("Printing" / "Operational") or
+        Bambu Lab ("running" / "finish") as needed.
+      input:
+        printing_state:
+          name: Printing state value
+          description: The state value that means the printer is actively printing.
+          default: printing
+          selector:
+            text:
+
+        complete_state:
+          name: Complete state value
+          description: The state value that means the print has finished successfully.
+          default: complete
+          selector:
+            text:
+
+    notification:
+      name: Notification settings
+      icon: mdi:bell
+      input:
+        notify_target:
+          name: Notify target
+          description: >
+            The notify action name for your device, e.g. notify.mobile_app_<phone_name>.
+            Find yours in Developer Tools -> Actions.
+          selector:
+            text:
+
+        notification_tag:
+          name: Notification tag
+          description: >
+            Unique tag for this printer's notification. Used to update the
+            existing notification in place and to clear it when printing stops.
+            Use a different tag per printer if you have multiple.
+          default: 3d-printer-progress
+          selector:
+            text:
+
+        click_action:
+          name: Click action (dashboard path)
+          description: >
+            Dashboard path to open when the notification is tapped.
+          default: /lovelace/0
+          selector:
+            text:
+
+        poll_interval_seconds:
+          name: Poll interval (seconds)
+          description: >
+            How often to check for progress updates. The notification only
+            updates when the progress value actually changes, so shorter intervals
+            improve responsiveness without spamming notifications.
+          default: 5
+          selector:
+            number:
+              min: 1
+              max: 60
+              unit_of_measurement: seconds
+
+variables:
+  _printer_name: !input printer_name
+  _printer_short_name: !input printer_short_name
+  _print_state_sensor: !input print_state_sensor
+  _progress_sensor: !input progress_sensor
+  _print_name_sensor: !input print_name_sensor
+  _eta_sensor: !input eta_sensor
+  _printing_state: !input printing_state
+  _complete_state: !input complete_state
+
+triggers:
+  - trigger: state
+    entity_id: !input print_state_sensor
+    to: !input printing_state
+
+conditions: []
+
+actions:
+  - repeat:
+      until:
+        - condition: template
+          value_template: >
+            {{ states(_print_state_sensor) == _complete_state }}
+      sequence:
+        # Track last progress to not update notification unnecessarily
+        - variables:
+            last_progress: "{{ states(_progress_sensor) | round(1) }}"
+
+        - action: !input notify_target
+          data:
+            title: >
+              {% if _print_name_sensor %}
+                {{ _printer_name }} - "{{ states(_print_name_sensor) }}"
+              {% else %}
+                {{ _printer_name }} - Print in progress
+              {% endif %}
+            message: >
+              Progress: {{ states(_progress_sensor) | round(1) }}%
+              {%- if _eta_sensor %}
+              \nETA: {{ states(_eta_sensor) }}
+              {%- endif %}
+            data:
+              tag: !input notification_tag
+              progress: "{{ states(_progress_sensor) | round(1) | int }}"
+              progress_max: 100
+              live_update: true
+              critical_text: "{{ (_printer_short_name ~ ': ') if _printer_short_name else '' }}{{ states(_progress_sensor) | round(1) | int }}%"
+              importance: low
+              notification_icon: mdi:printer-3d-nozzle
+              clickAction: !input click_action
+              persistent: true
+              sticky: true
+
+        # Short initial delay before we start waiting for progress to change
+        - delay:
+            seconds: !input poll_interval_seconds
+
+        # Wait until progress actually moves (or print finishes) before updating
+        - wait_template: >
+            {{ (states(_progress_sensor) | round(1)) > last_progress
+               or states(_print_state_sensor) == _complete_state }}
+          continue_on_timeout: true
+          timeout:
+            minutes: 30
+
+  # Clear the notification once printing is complete
+  - action: !input notify_target
+    data:
+      message: clear_notification
+      data:
+        tag: !input notification_tag
+
+mode: single
